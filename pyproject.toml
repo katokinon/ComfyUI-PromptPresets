@@ -3,17 +3,24 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "comfyui-prompt-presets"
+name = "prompt-presets"
 description = "在任意多行文本框左下角挂按钮：本节点历史提示词 + 按工作流分类的预设库"
 version = "0.1.0"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = []
+classifiers = [
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/katokinon/ComfyUI-PromptPresets"
+"Bug Tracker" = "https://github.com/katokinon/ComfyUI-PromptPresets/issues"
 
 [tool.setuptools]
 py-modules = []
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "katokinon"
 DisplayName = "提示词预设"
 Icon = ""
