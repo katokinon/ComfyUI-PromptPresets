@@ -10,5 +10,8 @@ venv/
 data.json
 data.json.bak
 
+# comfy node publish 的打包产物
+node.zip
+
 .DS_Store
 Thumbs.db

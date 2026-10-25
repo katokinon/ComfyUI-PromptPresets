@@ -266,6 +266,28 @@ function writeValue(node, w, text) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 上一条 / 下一条历史                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 在历史里前后翻。dir = 1 往回（更早用过的），-1 往前（更新的）。
+ * 当前文本不在历史里（比如手改过）时，先跳到最近用过的那条。
+ * 翻到头会绕回另一头，连续点不会卡住。
+ * 只写文本框，不动历史顺序 —— 否则翻两条之后参照点就漂了。
+ */
+async function stepHistory(node, w, dir) {
+  await ensureLib();
+  const list = historyOf(currentWorkflow().key, nodeKeyOf(node));
+  if (!list.length) return false;
+
+  const cur = readValue(w);
+  const idx = list.findIndex((h) => h.text === cur);
+  const next = idx < 0 ? 0 : (idx + dir + list.length) % list.length;
+  writeValue(node, w, list[next].text);
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* 按钮挂载                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -291,9 +313,32 @@ function mountWidget(node, w) {
     host.style.position = "relative";
   }
 
-  const btn = el("div", "pp-btn", "P");
-  btn.title = "提示词：历史记录 / 预设";
-  btn.dataset.ppButton = "1";
+  const bar = el("div", "pp-btns");
+  bar.dataset.ppButton = "1";
+
+  const stop = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+
+  const mkBtn = (cls, text, title, onClick) => {
+    const b = el("div", "pp-btn" + (cls ? " " + cls : ""), text);
+    b.title = title;
+    b.addEventListener("pointerdown", stop);
+    b.addEventListener("mousedown", stop);
+    b.addEventListener("dblclick", stop);
+    b.addEventListener("click", (ev) => {
+      stop(ev);
+      onClick();
+    });
+    return b;
+  };
+
+  const btnPanel = mkBtn("", "P", "提示词：历史记录 / 预设", () => openPanel(node, w, bar));
+  // ‹ 往回翻（更早用过的），› 往前翻（更新的）；到边界会绕回另一头
+  const btnPrev = mkBtn("pp-nav", "‹", "上一条历史提示词", () => stepHistory(node, w, 1));
+  const btnNext = mkBtn("pp-nav", "›", "下一条历史提示词", () => stepHistory(node, w, -1));
+  bar.append(btnPanel, btnPrev, btnNext);
 
   // 定位到「文本框自己的」左下角：按两者实际位置差算，并把画布缩放的倍数折算回来。
   // 只按容器算会把按钮顶到 padding 外面去，所以这里始终以 textarea 的矩形为准。
@@ -302,25 +347,12 @@ function mountWidget(node, w) {
   const scale = host.offsetHeight ? hr.height / host.offsetHeight || 1 : 1;
   const left = (dr.left - hr.left) / scale + BTN_INSET;
   const bottom = (hr.bottom - dr.bottom) / scale + BTN_INSET;
-  btn.style.left = Math.max(0, Math.round(left)) + "px";
-  btn.style.bottom = Math.max(0, Math.round(bottom)) + "px";
+  bar.style.left = Math.max(0, Math.round(left)) + "px";
+  bar.style.bottom = Math.max(0, Math.round(bottom)) + "px";
 
-  const stop = (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-  };
-
-  btn.addEventListener("pointerdown", stop);
-  btn.addEventListener("mousedown", stop);
-  btn.addEventListener("click", (ev) => {
-    stop(ev);
-    openPanel(node, w, btn);
-  });
-  btn.addEventListener("dblclick", stop);
-
-  host.appendChild(btn);
-  w.__ppBtn = btn;
-  w.__ppLeft = parseFloat(btn.style.left) || BTN_INSET;
+  host.appendChild(bar);
+  w.__ppBtn = bar;
+  w.__ppLeft = parseFloat(bar.style.left) || BTN_INSET;
 
   // 被别的插件按钮盖住时向右让位
   requestAnimationFrame(() => avoidOverlap(w));
@@ -378,11 +410,20 @@ function scanAndMount() {
 function ensureStyles() {
   if (document.getElementById("pp-style")) return;
   const css = `
-  .pp-btn{position:absolute;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
+  .pp-btns{position:absolute;z-index:9999;display:flex;gap:3px;}
+  .pp-btn{box-sizing:border-box;display:flex;align-items:center;justify-content:center;
     width:${BTN_W}px;height:${BTN_H}px;border-radius:5px;font-size:11px;line-height:1;cursor:pointer;
-    user-select:none;-webkit-user-select:none;z-index:9999;opacity:.7;color:inherit;font-family:inherit;
+    user-select:none;-webkit-user-select:none;opacity:.7;color:inherit;font-family:inherit;
     background:rgba(128,128,128,.20);border:1px solid rgba(128,128,128,.42);}
+  .pp-nav{width:18px;font-size:13px;}
   .pp-btn:hover{opacity:1;background:rgba(128,128,128,.34);}
+  .pp-tabs{display:flex;gap:4px;margin-bottom:6px;}
+  .pp-tab{flex:1;text-align:center;padding:3px 0;border-radius:6px;cursor:pointer;font-size:12px;
+    opacity:.6;border:1px solid transparent;user-select:none;}
+  .pp-tab:hover{opacity:.9;background:rgba(128,128,128,.12);}
+  .pp-tab.is-on{opacity:1;font-weight:600;background:rgba(128,128,128,.20);
+    border-color:rgba(128,128,128,.38);}
+  .pp-tab-n{font-size:11px;opacity:.6;margin-left:3px;}
   .pp-panel{position:fixed;z-index:12000;width:330px;max-height:70vh;display:flex;flex-direction:column;
     box-sizing:border-box;padding:10px;border-radius:10px;font-size:12px;line-height:1.5;
     color:var(--fg-color,#ddd);background:var(--comfy-menu-bg,#26262a);
@@ -446,7 +487,7 @@ function ensurePanel() {
   root.addEventListener("contextmenu", (ev) => ev.stopPropagation());
 
   document.body.appendChild(root);
-  PANEL = { root, anchor: null, node: null, widget: null, query: "", scope: "current" };
+  PANEL = { root, anchor: null, node: null, widget: null, query: "", scope: "current", tab: null };
 
   const onDocDown = (ev) => {
     if (!PANEL) return;
@@ -499,6 +540,7 @@ function openPanel(node, widget, anchor) {
   panel.anchor = anchor;
   panel.query = "";
   panel.scope = "current";
+  panel.tab = null;
   panel.nodeKey = nodeKeyOf(node);
 
   renderPanel();
@@ -562,9 +604,33 @@ function renderPanel() {
   root.appendChild(search);
 
   const scroll = el("div", "pp-scroll");
+
+  // 历史和预设分成两个选项卡，免得历史长了把预设压到看不见
+  const scopedKeys = crossWorkflowList(PANEL.scope === "current" ? wf.key : PANEL.scope);
+  const presetCount = scopedKeys.reduce((n, k) => n + presetsOf(k).length, 0);
+  if (!PANEL.tab) PANEL.tab = history.length ? "history" : "presets";
+
+  const tabs = el("div", "pp-tabs");
+  const mkTab = (id, label, count) => {
+    const t = el("div", "pp-tab" + (PANEL.tab === id ? " is-on" : ""));
+    t.appendChild(document.createTextNode(label));
+    t.appendChild(el("span", "pp-tab-n", String(count)));
+    t.onclick = (ev) => {
+      ev.stopPropagation();
+      if (PANEL.tab === id) return;
+      PANEL.tab = id;
+      PANEL.keepScroll = 0;
+      renderPanel();
+    };
+    return t;
+  };
+  tabs.appendChild(mkTab("history", "历史", history.length));
+  tabs.appendChild(mkTab("presets", "预设", presetCount));
+  root.appendChild(tabs);
   root.appendChild(scroll);
 
   /* ---------------- 历史 ---------------- */
+  if (PANEL.tab === "history") {
   const shownHistory = history.filter((h) => match(h.text));
   const hsec = el("div", "pp-sec");
   hsec.appendChild(el("div", "pp-sec-t", "本节点历史"));
@@ -593,9 +659,10 @@ function renderPanel() {
     }
   }
 
-  scroll.appendChild(el("div", "pp-div"));
+  }
 
   /* ---------------- 预设 ---------------- */
+  if (PANEL.tab === "presets") {
   const psec = el("div", "pp-sec");
   psec.appendChild(el("div", "pp-sec-t", "预设"));
   const total = (LIB.counts && LIB.counts.presets) || 0;
@@ -642,6 +709,7 @@ function renderPanel() {
     scroll.appendChild(
       el("div", "pp-empty", q ? "没有匹配的预设。" : "还没有预设。历史里那条右边的「存为」可以存一条。")
     );
+  }
   }
 
   // 底部：把当前文本框内容存成预设
