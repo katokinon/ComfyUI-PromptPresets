@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 运行时数据（正常在 ComfyUI/user 下，这里只是防止误放）
+data.json
+data.json.bak
+
+.DS_Store
+Thumbs.db
