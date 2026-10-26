@@ -15,6 +15,9 @@ const API = "/prompt_presets/api";
 const HISTORY_LIMIT = 10;
 const UNSAVED = "__unsaved__";
 
+// 面板的浏览状态（停在哪个页、看哪个工作流、是否显示正文）记在本地
+const UI_KEY = "promptPresets.ui";
+
 // 按钮默认贴在文本框左下角；被同一区域的其他按钮挡住时自动往右让位
 const BTN_W = 22;
 const BTN_H = 18;
@@ -136,6 +139,37 @@ function historyOf(key, nodeKey) {
   const wf = workflowOf(key);
   if (!wf) return [];
   return (wf.history || {})[nodeKey] || [];
+}
+
+/* ------------------------------------------------------------------ */
+/* 浏览状态的记忆                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 记住上次停在哪个选项卡、看哪个工作流的预设、要不要显示正文。
+ * 存 localStorage，跟工作流文件无关，换机器不会带走。
+ */
+function loadUI() {
+  try {
+    const raw = window.localStorage.getItem(UI_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function saveUI() {
+  if (!PANEL) return;
+  try {
+    window.localStorage.setItem(
+      UI_KEY,
+      JSON.stringify({ tab: PANEL.tab, scope: PANEL.scope, detail: PANEL.detail })
+    );
+  } catch (err) {
+    // 无痕模式或禁用存储时静默跳过
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -463,6 +497,10 @@ function ensureStyles() {
     color:inherit;background:var(--comfy-input-bg,rgba(128,128,128,.12));
     border:1px solid var(--border-color,rgba(128,128,128,.3));outline:none;}
   .pp-select option{background:var(--comfy-menu-bg,#26262a);color:var(--fg-color,#ddd);}
+  .pp-chk{display:flex;align-items:center;gap:3px;font-size:11px;opacity:.65;cursor:pointer;
+    user-select:none;flex:none;}
+  .pp-chk:hover{opacity:1;}
+  .pp-chk input{margin:0;width:12px;height:12px;cursor:pointer;accent-color:currentColor;}
   `;
   const style = document.createElement("style");
   style.id = "pp-style";
@@ -535,12 +573,15 @@ function placePanel() {
 
 function openPanel(node, widget, anchor) {
   const panel = ensurePanel();
+  const ui = loadUI();
   panel.node = node;
   panel.widget = widget;
   panel.anchor = anchor;
   panel.query = "";
-  panel.scope = "current";
-  panel.tab = null;
+  // 接上次的浏览状态：默认看当前工作流、显示正文；停在哪个页也照旧
+  panel.scope = ui.scope || "current";
+  panel.tab = ui.tab || null;
+  panel.detail = ui.detail !== false;
   panel.nodeKey = nodeKeyOf(node);
 
   renderPanel();
@@ -576,6 +617,11 @@ function renderPanel() {
   const nodeKey = PANEL.nodeKey;
   const history = historyOf(wf.key, nodeKey);
   const q = PANEL.query.toLowerCase();
+
+  // 上次记住的那个工作流如果被删掉或改名了，退回「当前工作流」，否则会一片空白
+  if (PANEL.scope !== "current" && PANEL.scope !== "all" && !(LIB.workflows || {})[PANEL.scope]) {
+    PANEL.scope = "current";
+  }
 
   const match = (s) => !q || String(s || "").toLowerCase().includes(q);
 
@@ -620,6 +666,7 @@ function renderPanel() {
       if (PANEL.tab === id) return;
       PANEL.tab = id;
       PANEL.keepScroll = 0;
+      saveUI();
       renderPanel();
     };
     return t;
@@ -665,8 +712,6 @@ function renderPanel() {
   if (PANEL.tab === "presets") {
   const psec = el("div", "pp-sec");
   psec.appendChild(el("div", "pp-sec-t", "预设"));
-  const total = (LIB.counts && LIB.counts.presets) || 0;
-  psec.appendChild(el("div", "pp-sec-n", String(total)));
 
   const select = el("select", "pp-select");
   select.onpointerdown = (ev) => ev.stopPropagation();
@@ -690,9 +735,26 @@ function renderPanel() {
   select.value = PANEL.scope;
   select.onchange = () => {
     PANEL.scope = select.value;
+    saveUI();
     renderPanel();
   };
   psec.appendChild(select);
+
+  // 只看标题：预设存多了以后一屏能扫过更多条
+  const chkWrap = el("label", "pp-chk");
+  chkWrap.title = "关闭后只显示标题，列表更紧凑";
+  const chk = document.createElement("input");
+  chk.type = "checkbox";
+  chk.checked = PANEL.detail;
+  chk.onpointerdown = (ev) => ev.stopPropagation();
+  chk.onchange = () => {
+    PANEL.detail = chk.checked;
+    saveUI();
+    renderPanel();
+  };
+  chkWrap.append(chk, document.createTextNode("详细"));
+  psec.appendChild(chkWrap);
+
   scroll.appendChild(psec);
 
   const keys = crossWorkflowList(PANEL.scope === "current" ? wf.key : PANEL.scope);
@@ -764,7 +826,7 @@ function renderPanel() {
     const txt = el("div", "pp-txt");
     const line = el("div", "pp-line", preset.name || guessName(preset.text));
     txt.appendChild(line);
-    if (preset.text && preset.text !== preset.name) {
+    if (PANEL.detail && preset.text && preset.text !== preset.name) {
       const sub = el("div", "pp-meta", preview(preset.text, 50));
       txt.appendChild(sub);
     }
