@@ -240,6 +240,32 @@ function nodeKeyOf(node) {
   return `${node.type || "Node"}#${node.id}`;
 }
 
+/** 当前是不是 Nodes 2.0（Vue 渲染）模式 */
+function isVueMode() {
+  try {
+    return !!(window.LiteGraph && window.LiteGraph.vueNodesMode);
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Nodes 2.0 下 widget.element 是个「游离」的 textarea —— 不在文档里、尺寸为 0，
+ * 真正显示的是 Vue 在节点容器里渲染的那个。所以要按节点去找。
+ */
+function vueTextareaOf(node, w) {
+  const box = document.querySelector(`.lg-node[data-node-id="${node.id}"]`);
+  if (!box) return null;
+  const areas = [...box.querySelectorAll("textarea")];
+  if (!areas.length) return null;
+  if (areas.length === 1) return areas[0];
+
+  // 一个节点有多个文本框时按顺序对位：Vue 是按 widgets 的顺序渲染的
+  const texts = (node.widgets || []).filter((x) => isPromptWidget(node, x));
+  const idx = texts.indexOf(w);
+  return areas[idx >= 0 && idx < areas.length ? idx : 0];
+}
+
 /**
  * 文本 widget 在 DOM 里的那层元素。
  *
@@ -247,7 +273,12 @@ function nodeKeyOf(node) {
  * 不同前端版本两者含义不完全一样，所以按「有尺寸」来挑，都挑不出来
  * 就退回容器里的第一个 textarea。
  */
-function domOf(w) {
+function domOf(node, w) {
+  if (isVueMode()) {
+    const ta = vueTextareaOf(node, w);
+    if (ta) return ta;
+  }
+
   const cands = [w.element, w.inputEl].filter(Boolean);
   for (const c of cands) {
     if (c.tagName === "TEXTAREA" || c.tagName === "INPUT") {
@@ -268,9 +299,9 @@ function domOf(w) {
 /* 值读写                                                              */
 /* ------------------------------------------------------------------ */
 
-function readValue(w) {
+function readValue(node, w) {
   if (typeof w.value === "string") return w.value;
-  const dom = domOf(w);
+  const dom = domOf(node, w);
   return dom && typeof dom.value === "string" ? dom.value : "";
 }
 
@@ -278,9 +309,13 @@ function writeValue(node, w, text) {
   const before = w.value;
   w.value = text;
 
-  const dom = domOf(w);
-  if (dom && typeof dom.value === "string" && dom.value !== text) {
-    dom.value = text;
+  // Nodes 2.0 的 textarea 是 Vue 受控组件，直接改它的 value 会和响应式状态打架，
+  // 只更新 widget.value 让 Vue 自己重渲染。传统画布模式下两边都要写。
+  if (!isVueMode()) {
+    const dom = domOf(node, w);
+    if (dom && typeof dom.value === "string" && dom.value !== text) {
+      dom.value = text;
+    }
   }
 
   try {
@@ -314,7 +349,7 @@ async function stepHistory(node, w, dir) {
   const list = historyOf(currentWorkflow().key, nodeKeyOf(node));
   if (!list.length) return false;
 
-  const cur = readValue(w);
+  const cur = readValue(node, w);
   const idx = list.findIndex((h) => h.text === cur);
   const next = idx < 0 ? 0 : (idx + dir + list.length) % list.length;
   writeValue(node, w, list[next].text);
@@ -336,7 +371,7 @@ function nudgeStyle(btn, offset) {
 function mountWidget(node, w) {
   if (w.__ppBtn && w.__ppBtn.isConnected) return true;
 
-  const dom = domOf(w);
+  const dom = domOf(node, w);
   if (!dom || !dom.parentElement) return false;
   if (!dom.getBoundingClientRect || dom.getBoundingClientRect().height <= 0) return false;
 
@@ -349,6 +384,7 @@ function mountWidget(node, w) {
 
   const bar = el("div", "pp-btns");
   bar.dataset.ppButton = "1";
+  bar.dataset.ppNode = String(node.id);
 
   const stop = (ev) => {
     ev.preventDefault();
@@ -427,7 +463,11 @@ function scanAndMount() {
     if (!node || node.id === -1) continue;
     for (const w of node.widgets || []) {
       if (!isPromptWidget(node, w)) continue;
-      if (w.__ppBtn && w.__ppBtn.isConnected) continue;
+      if (w.__ppBtn && w.__ppBtn.isConnected) {
+        // Nodes 2.0 会复用节点 DOM，按钮可能残留在已经换了身份的节点上
+        if (w.__ppBtn.dataset.ppNode === String(node.id)) continue;
+        w.__ppBtn.remove();
+      }
       try {
         mountWidget(node, w);
       } catch (err) {
@@ -907,7 +947,7 @@ function renderPanel() {
   }
 
   function startSaveCurrent(foot) {
-    const text = readValue(widget);
+    const text = readValue(node, widget);
     if (!text.trim()) {
       window.alert("文本框是空的，没有可保存的内容。");
       return;
@@ -984,7 +1024,7 @@ function collectPrompts() {
     if (node.mode) continue;
     for (const w of node.widgets || []) {
       if (!isPromptWidget(node, w)) continue;
-      const v = readValue(w);
+      const v = readValue(node, w);
       if (typeof v === "string" && v.trim()) {
         out.push({ node: nodeKeyOf(node), text: v });
       }
